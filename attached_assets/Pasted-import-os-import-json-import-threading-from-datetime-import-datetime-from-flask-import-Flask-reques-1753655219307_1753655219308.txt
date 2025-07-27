@@ -1,0 +1,132 @@
+import os
+import json
+import threading
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template, send_from_directory
+from web3 import Web3
+from dotenv import load_dotenv
+from eth_abi import decode_abi
+
+# Load environment variables
+load_dotenv()
+TENDERLY_RPC = os.getenv("TENDERLY_RPC", "https://base.gateway.tenderly.co/1cAI6rLkKToMdpKceTtTAe")
+
+# Flask setup
+app = Flask(__name__, static_folder='static', template_folder='templates')
+w3 = Web3(Web3.HTTPProvider(TENDERLY_RPC))
+RECEIVER = Web3.to_checksum_address(os.getenv("RECEIVER", "0xeb5b687eb21dd4c7ae9d43b7d641f0d9e79d520d"))
+
+# Memory storage
+ledger = []
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "OK", "chainId": w3.eth.chain_id})
+
+@app.route("/claim", methods=["POST"])
+def claim():
+    data = request.json
+    address = data.get("address")
+
+    if not Web3.is_address(address):
+        return jsonify({"error": "Invalid wallet address"}), 400
+
+    address = Web3.to_checksum_address(address)
+    matched = [tx for tx in ledger if tx["from"] == address]
+
+    if not matched:
+        return jsonify({"error": "No transactions found"}), 404
+
+    total = sum(float(tx["value"]) for tx in matched)
+    return jsonify({
+        "wallet": address,
+        "eligible": True,
+        "total_eth": total,
+        "tx_count": len(matched)
+    })
+
+@app.route("/tx/simulate", methods=["POST"])
+def simulate_tx():
+    try:
+        tx = request.get_json()
+        formatted_tx = {
+            "from": Web3.to_checksum_address(tx["from"]),
+            "to": Web3.to_checksum_address(tx["to"]),
+            "data": tx["data"],
+            "value": int(tx.get("value", "0"), 16),
+            "gas": int(tx.get("gas", "0x5208"), 16),
+            "gasPrice": int(tx.get("gasPrice", "0x3b9aca00"), 16)
+        }
+        result = w3.eth.call(formatted_tx)
+        return jsonify({"success": True, "result": result.hex()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+@app.route("/tx/batch", methods=["POST"])
+def batch_simulate():
+    results = []
+    for tx in request.get_json().get("batch", []):
+        try:
+            formatted_tx = {
+                "from": Web3.to_checksum_address(tx["from"]),
+                "to": Web3.to_checksum_address(tx["to"]),
+                "data": tx["data"],
+                "value": int(tx.get("value", "0"), 16),
+                "gas": int(tx.get("gas", "0x5208"), 16),
+                "gasPrice": int(tx.get("gasPrice", "0x3b9aca00"), 16)
+            }
+            result = w3.eth.call(formatted_tx)
+            results.append({"tx": tx, "result": result.hex(), "success": True})
+        except Exception as e:
+            results.append({"tx": tx, "error": str(e), "success": False})
+    return jsonify(results)
+
+@app.route("/tx/decode", methods=["POST"])
+def decode_tx():
+    try:
+        data = request.json
+        types = data["types"]
+        hex_data = data["data"]
+        decoded = decode_abi(types, bytes.fromhex(hex_data[2:]))
+        return jsonify({"decoded": decoded})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory("static", filename)
+
+def monitor():
+    print("🧠 Starting chain listener...")
+    block = w3.eth.block_number
+    while True:
+        try:
+            latest = w3.eth.block_number
+            for b in range(block, latest + 1):
+                blk = w3.eth.get_block(b, full_transactions=True)
+                for tx in blk.transactions:
+                    if tx.to and tx.to.lower() == RECEIVER.lower():
+                        value = w3.from_wei(tx.value, 'ether')
+                        tx_data = {
+                            "hash": tx.hash.hex(),
+                            "from": tx["from"],
+                            "value": float(value),
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                        if not any(t["hash"] == tx_data["hash"] for t in ledger):
+                            ledger.append(tx_data)
+                            print(f"💰 {value} ETH from {tx['from']}")
+            block = latest + 1
+        except Exception as e:
+            print(f"[Monitor Error] {e}")
+        w3.middleware_onion.clear()
+
+# Run background monitor
+threading.Thread(target=monitor, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)

@@ -1,7 +1,61 @@
 [project]
-name = "python-template"
-version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
+name = "coincanvas"
+version = "1.0.0"
+description = "On-chain deposit tracker with claimable token logic on Base chain"
+authors = ["BoomchainLabs <support@boomchainlab.com>"]
 requires-python = ">=3.11"
-dependencies = []
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["blockchain", "flask", "web3", "ethereum", "base", "coincanvas"]
+
+dependencies = [
+    "flask>=3.1.1",
+    "python-dotenv>=1.1.1",
+    "web3>=7.12.1",
+    "gunicorn>=21.2.0",  # optional: for production server
+]
+
+[tool.setuptools]
+packages = ["coincanvas"]
+
+[tool.setuptools.package-data]
+coincanvas = ["templates/*.html", "static/*.*"]
+
+[project.scripts]
+start = "coincanvas.main:run"[project]
+name = "coincanvas"
+version = "1.0.0"
+description = "On-chain deposit tracker with claimable token logic on Base chain"
+authors = ["BoomchainLabs <support@boomchainlab.com>"]
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["blockchain", "flask", "web3", "ethereum", "base", "coincanvas"]
+
+dependencies = [
+    "flask>=3.1.1",
+    "python-dotenv>=1.1.1",
+    "web3>=7.12.1",
+    "gunicorn>=21.2.0",  # optional: for production server
+]
+
+[tool.setuptools]
+packages = ["coincanvas"]
+
+[tool.setuptools.package-data]
+coincanvas = ["templates/*.html", "static/*.*"]
+
+[project.scripts]
+start = "coincanvas.main:run"coincanvas/
+│
+├── coincanvas/
+│   ├── __init__.py         # Indicates that this folder should be treated as a package
+│   ├── main.py             # Main application file for your Flask app
+│   ├── templates/          # Directory for HTML templates
+│   │   └── dashboard.html   # Template for displaying deposits
+│   └── static/             # Optional directory for static files like CSS
+│       └── style.css       # Optional CSS file for styling
+│
+├── pyproject.toml          # Configuration file for your project
+├── README.md               # Project documentation
+├── .env                    # Environment variables for sensitive data

@@ -1,0 +1,79 @@
+import os, json, threading
+from flask import Flask, request, jsonify, render_template
+from web3 import Web3
+from datetime import datetime
+
+app = Flask(__name__, static_folder='static', template_folder='templates')
+
+# Setup Web3
+TENDERLY_RPC = os.getenv("TENDERLY_RPC", "https://base.gateway.tenderly.co/1cAI6rLkKToMdpKceTtTAe")
+w3 = Web3(Web3.HTTPProvider(TENDERLY_RPC))
+RECEIVER = Web3.to_checksum_address("0xeb5b687eb21dd4c7ae9d43b7d641f0d9e79d520d")
+
+# Ledger
+ledger = []
+ledger_lock = threading.Lock()
+LEDGER_FILE = 'ledger.json'
+
+# Load and save ledger
+def save_ledger():
+    with ledger_lock:
+        with open(LEDGER_FILE, 'w') as f: json.dump(ledger, f)
+
+def load_ledger():
+    global ledger
+    try: ledger = json.load(open(LEDGER_FILE))
+    except: ledger = []
+
+load_ledger()
+
+@app.route('/')
+def index():
+    return render_template("index.html")
+
+@app.route('/claim', methods=['POST'])
+def claim():
+    data = request.get_json()
+    address = data.get("address")
+    if not Web3.is_address(address):
+        return jsonify({"error": "Invalid address"}), 400
+    address = Web3.to_checksum_address(address)
+    with ledger_lock:
+        matched = [tx for tx in ledger if tx['from'] == address]
+    if not matched:
+        return jsonify({"error": "No deposit record found"}), 404
+    total = sum(tx['value'] for tx in matched)
+    # Merkle placeholder
+    proof = ["0x1234..."]  # Replace with real Merkle proof later
+    return jsonify({"wallet": address, "total": total, "proof": proof})
+
+def monitor_deposits():
+    print("🔍 Watching deposits...")
+    block = w3.eth.block_number
+    while True:
+        try:
+            latest = w3.eth.block_number
+            for b in range(block, latest + 1):
+                blk = w3.eth.get_block(b, full_transactions=True)
+                for tx in blk.transactions:
+                    if tx.to and tx.to.lower() == RECEIVER.lower():
+                        val = w3.from_wei(tx.value, 'ether')
+                        txh = tx.hash.hex()
+                        with ledger_lock:
+                            if txh not in [t['hash'] for t in ledger]:
+                                ledger.append({
+                                    "hash": txh,
+                                    "from": tx['from'],
+                                    "value": float(val),
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                save_ledger()
+                                print(f"💰 {val} ETH from {tx['from']}")
+            block = latest + 1
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+threading.Thread(target=monitor_deposits, daemon=True).start()
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

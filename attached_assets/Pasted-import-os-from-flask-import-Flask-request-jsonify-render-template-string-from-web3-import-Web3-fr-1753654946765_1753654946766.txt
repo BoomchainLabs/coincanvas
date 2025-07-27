@@ -1,0 +1,165 @@
+import os
+from flask import Flask, request, jsonify, render_template_string
+from web3 import Web3
+from dotenv import load_dotenv
+from datetime import datetime
+import threading
+
+load_dotenv()
+app = Flask(__name__)
+
+# === Config ===
+TENDERLY_RPC = os.getenv("TENDERLY_RPC", "https://base.gateway.tenderly.co/1cAI6rLkKToMdpKceTtTAe")
+RECEIVER = Web3.to_checksum_address("0xeb5b687eb21dd4c7ae9d43b7d641f0d9e79d520d")
+w3 = Web3(Web3.HTTPProvider(TENDERLY_RPC))
+
+# === In-memory transaction store ===
+ledger = []
+
+# === HTML Template ===
+html_template = """
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <title>CoinCanvas | Wallet Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); transition: all 0.3s ease; margin: 20px; }
+    .container { max-width: 700px; margin: auto; }
+    input, button { padding: 10px; margin-top: 10px; width: 100%; border-radius: 5px; }
+    button { background: #007BFF; color: white; border: none; }
+    .dark { --bg: #121212; --text: #fff; }
+    .light { --bg: #f7f7f7; --text: #000; }
+    #chart-container { margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🧠 CoinCanvas Tracker</h2>
+    <input type="text" id="wallet" placeholder="Enter your wallet address" />
+    <button onclick="checkClaim()">Check Claim</button>
+    <p id="status"></p>
+    <button onclick="toggleTheme()">Toggle Theme</button>
+
+    <div id="chart-container">
+      <canvas id="gasChart" width="400" height="200"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const theme = document.documentElement;
+    function toggleTheme() {
+      const current = theme.getAttribute('data-theme');
+      theme.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
+      document.body.className = current === 'light' ? 'dark' : 'light';
+    }
+
+    async function checkClaim() {
+      const wallet = document.getElementById('wallet').value;
+      const res = await fetch("/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: wallet })
+      });
+      const data = await res.json();
+      const msg = data.error ? `❌ ${data.error}` : `✅ ${data.total_deposit_eth} ETH from ${wallet}`;
+      document.getElementById('status').innerText = msg;
+    }
+
+    // Fake latency/gas chart data
+    const ctx = document.getElementById('gasChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: Array.from({length: 10}, (_, i) => `Tx ${i+1}`),
+        datasets: [{
+          label: 'Latency (ms)',
+          data: Array.from({length: 10}, () => Math.random() * 200),
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.4
+        }]
+      }
+    });
+  </script>
+</body>
+</html>
+"""
+
+# === Routes ===
+@app.route('/')
+def home():
+    return render_template_string(html_template)
+
+@app.route('/claim', methods=['POST'])
+def claim():
+    data = request.get_json()
+    address = data.get("address")
+
+    if not Web3.is_address(address):
+        return jsonify({"error": "Invalid address"}), 400
+
+    matches = [tx for tx in ledger if tx['from'] == Web3.to_checksum_address(address)]
+
+    if not matches:
+        return jsonify({"error": "No deposit record found"}), 404
+
+    reward = sum([tx['value'] for tx in matches])
+    return jsonify({
+        "message": "Claimable",
+        "wallet": address,
+        "total_deposit_eth": reward,
+        "status": "ok"
+    })
+
+@app.route("/tx/simulate", methods=["POST"])
+def simulate():
+    try:
+        data = request.get_json()
+        tx = {
+            "from": Web3.to_checksum_address(data["from"]),
+            "to": Web3.to_checksum_address(data["to"]),
+            "data": data["data"],
+            "value": int(data.get("value", "0"), 16),
+            "gas": int(data.get("gas", "0x5208"), 16),
+            "gasPrice": int(data.get("gasPrice", "0x3b9aca00"), 16)
+        }
+        result = w3.eth.call(tx)
+        return jsonify({"success": True, "result": result.hex()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# === Background Monitor ===
+def monitor_deposits():
+    print("🔁 Starting transaction monitor")
+    last_block = w3.eth.block_number
+
+    while True:
+        try:
+            latest = w3.eth.block_number
+            for blk in range(last_block, latest + 1):
+                block_data = w3.eth.get_block(blk, full_transactions=True)
+                for tx in block_data.transactions:
+                    if tx.to and tx.to.lower() == RECEIVER.lower():
+                        tx_hash = tx.hash.hex()
+                        sender = tx['from']
+                        value_eth = float(w3.from_wei(tx.value, 'ether'))
+                        record = {
+                            "hash": tx_hash,
+                            "from": Web3.to_checksum_address(sender),
+                            "value": value_eth,
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                        if tx_hash not in [t['hash'] for t in ledger]:
+                            ledger.append(record)
+                            print(f"✅ {value_eth} ETH from {sender}")
+            last_block = latest + 1
+        except Exception as e:
+            print(f"[Monitor Error] {e}")
+
+# === Thread Init ===
+threading.Thread(target=monitor_deposits, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)

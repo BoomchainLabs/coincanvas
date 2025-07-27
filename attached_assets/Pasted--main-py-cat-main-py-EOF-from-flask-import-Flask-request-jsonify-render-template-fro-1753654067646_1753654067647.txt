@@ -1,0 +1,129 @@
+# === main.py ===
+cat > main.py <<EOF
+from flask import Flask, request, jsonify, render_template
+from web3 import Web3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+app = Flask(__name__)
+TENDERLY_RPC = os.getenv("TENDERLY_RPC")
+w3 = Web3(Web3.HTTPProvider(TENDERLY_RPC))
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/tx/simulate", methods=["POST"])
+def simulate():
+    try:
+        data = request.get_json()
+        tx = {
+            "from": Web3.to_checksum_address(data["from"]),
+            "to": Web3.to_checksum_address(data["to"]),
+            "data": data["data"],
+            "value": int(data.get("value", "0"), 16),
+            "gas": int(data.get("gas", "0x5208"), 16),
+            "gasPrice": int(data.get("gasPrice", "0x3b9aca00"), 16)
+        }
+        result = w3.eth.call(tx)
+        return jsonify({"success": True, "result": result.hex()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=3000)
+EOF
+
+# === .env ===
+cat > .env <<EOF
+TENDERLY_RPC=https://base.gateway.tenderly.co/1cAI6rLkKToMdpKceTtTAe
+EOF
+
+# === templates/index.html ===
+mkdir -p templates
+cat > templates/index.html <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Onchain Analyzer</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      padding: 2rem;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 0.5rem;
+      margin: 0.5rem 0;
+      background: #1f1f1f;
+      color: white;
+      border: 1px solid #444;
+    }
+    button {
+      padding: 0.7rem 1.5rem;
+      background: #09c;
+      border: none;
+      color: white;
+      cursor: pointer;
+    }
+    pre {
+      background: #1a1a1a;
+      padding: 1rem;
+      margin-top: 1rem;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>📡 Onchain Analyzer</h1>
+  <form id="simulateForm">
+    <input type="text" id="from" placeholder="Sender Address (0x...)" required />
+    <input type="text" id="to" placeholder="Contract Address (0x...)" required />
+    <textarea id="data" placeholder="Call Data (0x...)" required></textarea>
+    <button type="submit">Simulate</button>
+  </form>
+  <pre id="response"></pre>
+  <script>
+    document.getElementById("simulateForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const from = document.getElementById("from").value;
+      const to = document.getElementById("to").value;
+      const data = document.getElementById("data").value;
+
+      const res = await fetch("/tx/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, data })
+      });
+      const json = await res.json();
+      document.getElementById("response").textContent = JSON.stringify(json, null, 2);
+    };
+  </script>
+</body>
+</html>
+EOF
+
+# === pyproject.toml ===
+cat > pyproject.toml <<EOF
+[project]
+name = "onchain-analyzer"
+version = "0.1.0"
+description = "Flask + Tenderly RPC Analyzer"
+authors = ["BoomchainLab"]
+requires-python = ">=3.11"
+dependencies = [
+  "flask>=3.1.1",
+  "python-dotenv>=1.1.1",
+  "web3>=7.12.1"
+]
+EOF
+
+# ✅ Install Python dependencies
+pip install flask python-dotenv web3
+
+echo "✅ All set. Click ▶️ Run or run: python3 main.py"

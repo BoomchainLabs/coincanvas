@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# === Project Setup ===
+
+mkdir -p templates
+
+# --- main.py ---
+cat > main.py <<EOF
+from flask import Flask, request, jsonify, render_template
+from web3 import Web3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+app = Flask(__name__)
+TENDERLY_RPC = os.getenv("TENDERLY_RPC")
+w3 = Web3(Web3.HTTPProvider(TENDERLY_RPC))
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/tx/simulate", methods=["POST"])
+def simulate():
+    try:
+        data = request.get_json()
+        tx = {
+            "from": Web3.to_checksum_address(data["from"]),
+            "to": Web3.to_checksum_address(data["to"]),
+            "data": data["data"],
+            "value": int(data.get("value", "0"), 16),
+            "gas": int(data.get("gas", "0x5208"), 16),
+            "gasPrice": int(data.get("gasPrice", "0x3b9aca00"), 16)
+        }
+        result = w3.eth.call(tx)
+        return jsonify({"success": True, "result": result.hex()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=3000)
+EOF
+
+# --- .env ---
+cat > .env <<EOF
+TENDERLY_RPC=https://base.gateway.tenderly.co/1cAI6rLkKToMdpKceTtTAe
+EOF
+
+# --- templates/index.html ---
+cat > templates/index.html <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CoinCanvas: Onchain Analyzer</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0c0c10;
+      color: #f8f8f8;
+      padding: 2rem;
+    }
+    h1 {
+      color: #18c1f0;
+      font-weight: 700;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 0.75rem;
+      margin-top: 0.5rem;
+      background: #1e1e28;
+      border: 1px solid #333;
+      color: #eee;
+      font-size: 1rem;
+      border-radius: 6px;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.75rem 2rem;
+      background: #18c1f0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    pre {
+      background: #161622;
+      padding: 1rem;
+      border-radius: 6px;
+      margin-top: 1rem;
+      font-size: 0.95rem;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>📡 CoinCanvas Onchain Analyzer</h1>
+  <form id="simulateForm">
+    <label>Sender Address:</label>
+    <input type="text" id="from" placeholder="0x..." required />
+
+    <label>Contract Address:</label>
+    <input type="text" id="to" placeholder="0x..." required />
+
+    <label>Calldata:</label>
+    <textarea id="data" placeholder="0x..." rows="4" required></textarea>
+
+    <button type="submit">Simulate Transaction</button>
+  </form>
+
+  <pre id="response">Awaiting result...</pre>
+
+  <script>
+    document.getElementById("simulateForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const from = document.getElementById("from").value;
+      const to = document.getElementById("to").value;
+      const data = document.getElementById("data").value;
+
+      const res = await fetch("/tx/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, data })
+      });
+
+      const json = await res.json();
+      document.getElementById("response").textContent = JSON.stringify(json, null, 2);
+    };
+  </script>
+</body>
+</html>
+EOF
+
+# --- pyproject.toml ---
+cat > pyproject.toml <<EOF
+[project]
+name = "coincanvas-analyzer"
+version = "0.1.0"
+description = "CoinCanvas Flask Onchain Analyzer"
+authors = ["BoomchainLabs"]
+requires-python = ">=3.11"
+dependencies = [
+  "flask>=3.1.1",
+  "python-dotenv>=1.1.1",
+  "web3>=7.12.1"
+]
+EOF
+
+# Install dependencies
+pip install flask python-dotenv web3
+
+echo "✅ Setup complete. Click ▶️ Run or execute: python3 main.py"
